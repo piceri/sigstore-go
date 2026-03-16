@@ -15,12 +15,17 @@
 package verify
 
 import (
+	"bytes"
 	"crypto"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/sha512"
 	"testing"
 
 	in_toto "github.com/in-toto/attestation/go/v1"
+	"github.com/sigstore/sigstore/pkg/signature"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -152,6 +157,100 @@ func TestGetHashFunctions(t *testing.T) {
 				assert.NoError(t, err)
 			}
 			assert.Equal(t, test.expectOutput, hfs)
+		})
+	}
+}
+
+// testMessageSignatureContent is a mock for testing verifyMessageSignatureContent directly.
+type testMessageSignatureContent struct {
+	digest          []byte
+	digestAlgorithm string
+	signature       []byte
+}
+
+func (t *testMessageSignatureContent) Digest() []byte          { return t.digest }
+func (t *testMessageSignatureContent) DigestAlgorithm() string { return t.digestAlgorithm }
+func (t *testMessageSignatureContent) Signature() []byte       { return t.signature }
+
+func TestVerifyMessageDigest(t *testing.T) {
+	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	assert.NoError(t, err)
+	signer, err := signature.LoadECDSASignerVerifier(privKey, crypto.SHA256)
+	assert.NoError(t, err)
+
+	artifact := []byte("test artifact")
+	artifactDigest256 := sha256.Sum256(artifact)
+	artifactDigest384 := sha512.Sum384(artifact)
+	artifactDigest512 := sha512.Sum512(artifact)
+	wrongDigest := sha256.Sum256([]byte("wrong digest"))
+
+	sig, err := signer.SignMessage(bytes.NewReader(artifact))
+	assert.NoError(t, err)
+
+	for _, tc := range []struct {
+		name            string
+		digest          []byte
+		digestAlgorithm string
+		expectErr       string
+	}{
+		{
+			name:            "matching digest passes - 256",
+			digest:          artifactDigest256[:],
+			digestAlgorithm: "SHA2_256",
+		},
+		{
+			name:            "matching digest passes - 384",
+			digest:          artifactDigest384[:],
+			digestAlgorithm: "SHA2_384",
+		},
+		{
+			name:            "matching digest passes - 512",
+			digest:          artifactDigest512[:],
+			digestAlgorithm: "SHA2_512",
+		},
+		{
+			name:            "mismatched hash algorithm",
+			digest:          artifactDigest256[:],
+			digestAlgorithm: "SHA2_384",
+			expectErr:       "artifact digest does not match message digest",
+		},
+		{
+			name:            "mismatched digest fails",
+			digest:          wrongDigest[:],
+			digestAlgorithm: "SHA2_256",
+			expectErr:       "artifact digest does not match message digest",
+		},
+		{
+			name:            "nil digest returns error",
+			digest:          nil,
+			digestAlgorithm: "SHA2_256",
+			expectErr:       "message is missing artifact digest",
+		},
+		{
+			name:            "empty digest algorithm returns error",
+			digest:          artifactDigest256[:],
+			digestAlgorithm: "",
+			expectErr:       "empty digest algorithm",
+		},
+		{
+			name:            "unsupported digest algorithm returns error",
+			digest:          artifactDigest256[:],
+			digestAlgorithm: "SHA3_256",
+			expectErr:       "unsupported digest algorithm",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			msg := &testMessageSignatureContent{
+				digest:          tc.digest,
+				digestAlgorithm: tc.digestAlgorithm,
+				signature:       sig,
+			}
+			err := verifyMessageSignatureContent(signer, msg, bytes.NewReader(artifact))
+			if tc.expectErr != "" {
+				assert.ErrorContains(t, err, tc.expectErr)
+			} else {
+				assert.NoError(t, err)
+			}
 		})
 	}
 }
