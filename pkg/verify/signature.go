@@ -380,12 +380,13 @@ func isDigestInSlice(digest []byte, digestSlice [][]byte) bool {
 }
 
 func verifyMessageSignatureContent(verifier signature.Verifier, msg MessageSignatureContent, artifact io.Reader) error {
+	// Message digest is an unauthenticated hint and MUST NOT be used to verify the signature
 	if msg.Digest() == nil {
 		return errors.New("message is missing artifact digest")
 	}
 	hashFunc, err := algStringToHashFunc(msg.DigestAlgorithm())
 	if err != nil {
-		return fmt.Errorf("could not verify message digest: %w", err)
+		return fmt.Errorf("could not verify message digest algorithm: %w", err)
 	}
 	hasher := hashFunc.New()
 	reader := io.TeeReader(artifact, hasher)
@@ -395,6 +396,7 @@ func verifyMessageSignatureContent(verifier signature.Verifier, msg MessageSigna
 		return fmt.Errorf("could not verify message: %w", err)
 	}
 
+	// Message digest is also checked against actually digest after signature verification as a sanity check
 	if !bytes.Equal(hasher.Sum(nil), msg.Digest()) {
 		return errors.New("artifact digest does not match message digest")
 	}
